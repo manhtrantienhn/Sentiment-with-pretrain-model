@@ -154,7 +154,7 @@ def main():
 
     parser.add_argument('--train_dataset', type=str, default='./train.json', help='path to train dataset')
     parser.add_argument('--val_dataset', type=str, default='./val.json', help='path to val dataset')
-    parser.add_argument('--batch_size', type=int, default= 64, help='batch size')
+    parser.add_argument('--batch_size', type=int, default= 256, help='batch size')
     parser.add_argument('--epochs', type=int, default=20, help='number epochs')
     parser.add_argument('--hidden_size', type=int, default=400, help='hidden size of rnns layer')
     parser.add_argument('--embedd_dim', type=int, default=300, help='embedding dim of EmbeddingLayer')

@@ -35,8 +35,7 @@ class Encoder(nn.Module):
         self.bert = AutoModel.from_pretrained('bert-base-uncased')
 
         # embedding for sentiment or load pretrain at here
-        self.embeddings = nn.Embedding(
-            num_embeddings=vocab_size, embedding_dim=embedding_dim)
+        self.embeddings = nn.Embedding(num_embeddings=vocab_size, embedding_dim=embedding_dim)
 
         # the first rnn to learning sentiment present
         self.rnn1 = nn.GRU(input_size=embedding_dim, hidden_size=hidden_size, num_layers=num_layers,
@@ -84,12 +83,14 @@ class Encoder(nn.Module):
         # `last_hidden_states` shape of [batch_size, seq_len, hidden_size of bert: 768]
 
         embedd_sentiment = self.dropout(self.embeddings(x))
-        # sentiment `embedd_sentiment` shape of [batch_size, seq_len, embedding_dim]
+        # sentiment `embedd_sentiment` size of [batch_size, seq_len, embedding_dim]
 
         h = self._init_hidden(x.size(0))
 
         output1, h1 = self.rnn1(embedd_sentiment, h)
         output2, h2 = self.rnn2(last_hidden_states, h)
+        # output, h size of [batch_size, seq_len, self.D * hidden_size]
+
         return (output1, h1), (output2, h2)
 
 
@@ -155,13 +156,22 @@ class Decoder(nn.Module):
                                             num_hiddens=hidden_size * self.D)
         self.attention2 = BahdanauAttention(dec_dim=hidden_size * self.D, enc_dim=encoder_output_dim,
                                             num_hiddens=hidden_size * self.D)
+        
+        self.fc = nn.Sequential(nn.Linear(2*(encoder_output_dim + hidden_size*2), 2 * encoder_output_dim),
+                                nn.ReLU())
 
     def forward(self, x: Tensor, output1_encoder: Tensor, h1_encoder: Tensor, input_ids: Tensor,
                 attention_mask: Tensor, output2_encoder: Tensor, h2_encoder: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
 
+        """
+        Args:
+            `x` (Tensor): seq num for embedding layer
+            `output1_encoder`, `h1_encoder`, `output2_encoder`, `h2_encoder` (Tensor): output of encoder layer
+            `input_id`, `attention_mask` (Tensor): tokens using to extract feature from `bert`
+        """
+
         # `input_ids`, `attention_mask` size of [batch_size] -> [batch_size, 1]
-        input_ids, attention_mask = input_ids.unsqueeze(
-            1), attention_mask.unsqueeze(1)
+        input_ids, attention_mask = input_ids.unsqueeze(1), attention_mask.unsqueeze(1)
         if self.finetune:
             last_hidden_states = self.bert(
                 input_ids, attention_mask).last_hidden_state
@@ -171,7 +181,7 @@ class Decoder(nn.Module):
                     input_ids, attention_mask).last_hidden_state
         # `last_hidden_states` size of [batch_size, 1, hidden_size of bert: 768]
 
-        # `x` size of batch_size -> (batch_size, 1) '1' denote seq_length
+        # `x` size of batch_size -> (batch_size, 1): `1` denote seq_length
         x = x.unsqueeze(1)
         # sentiment embedding size of [batch_size, 1, embedding_dim]
         embedd_sentiment = self.dropout(self.embeddings(x))
@@ -184,8 +194,8 @@ class Decoder(nn.Module):
 
         output1 = torch.cat((output1.squeeze(1), context_vector1), dim=1)
         output2 = torch.cat((output2.squeeze(1), context_vector2), dim=1)
-        output = torch.cat((output1, output2), dim=1)
-        # `output` size of [batch_size, 2* (encoder_output_dim + hidden_size*2)]
+        output = torch.cat((output1, output2), dim=1) # [batch_size, 2* (encoder_output_dim + hidden_size*2)]
+        output = self.fc(output) # [batch_size, 2 * encoder_output_dim]
 
         return output, h1, h2
 
@@ -196,8 +206,7 @@ class SentimentModel(nn.Module):
         self.decoder1 = decoder1
         self.decoder2 = decoder2
         self.relu = nn.ReLU()
-        self.T = nn.Linear(2*(encoder.hidden_size*encoder.D +
-                           decoder1.hidden_size * decoder1.D), num_aspect)
+        self.T = nn.Linear(2*(encoder.hidden_size*encoder.D), num_aspect)
         self.Z1 = nn.Linear(num_aspect, decoder1.vocab_size)
         self.Z2 = nn.Linear(num_aspect, decoder2.vocab_size)
 
@@ -210,13 +219,10 @@ class SentimentModel(nn.Module):
         target_len = target_inp.size(1)
         revert_inp_len = revert_source_inp.size(1)
 
-        output_reverts = torch.zeros(
-            revert_inp_len, batch_size, self.decoder1.vocab_size)
-        output_masks = torch.zeros(
-            target_len, batch_size, self.decoder2.vocab_size)
+        output_reverts = torch.zeros(revert_inp_len, batch_size, self.decoder1.vocab_size)
+        output_masks = torch.zeros(target_len, batch_size, self.decoder2.vocab_size)
 
-        (output1, h1), (output2, h2) = self.encoder(
-            source_input_ids, source_att_mask, source_inp)
+        (output1, h1), (output2, h2) = self.encoder(source_input_ids, source_att_mask, source_inp)
 
         input_ = revert_source_inp[:, 0]
         input_ids = revert_source_input_ids[:, 0]
@@ -225,7 +231,7 @@ class SentimentModel(nn.Module):
             output_revert, h1, h2 = self.decoder1(x=input_, output1_encoder=output1, h1_encoder=h1, input_ids=input_ids,
                                                   attention_mask=attention_mask, output2_encoder=output2, h2_encoder=h2)
 
-            output_revert = self.T(output_revert)
+            output_revert = self.ReLU(self.T(output_revert))
             output_revert = self.Z1(self.relu(output_revert))
 
             output_reverts[i] = output_revert
@@ -237,8 +243,7 @@ class SentimentModel(nn.Module):
             input_ids = revert_source_input_ids[:, i]
             attention_mask = revert_source_att_mask[:, i]
 
-        (output1, h1), (output2, h2) = self.encoder(
-            source_input_ids, source_att_mask, source_inp)
+        (output1, h1), (output2, h2) = self.encoder(source_input_ids, source_att_mask, source_inp)
 
         input_ = target_inp[:, 0]
         input_ids = target_input_ids[:, 0]
@@ -247,7 +252,7 @@ class SentimentModel(nn.Module):
             output_mask, h1, h2 = self.decoder2(x=input_, output1_encoder=output1, h1_encoder=h1, input_ids=input_ids,
                                                 attention_mask=attention_mask, output2_encoder=output2, h2_encoder=h2)
 
-            output_mask = self.T(output_mask)
+            output_mask = self.ReLU(self.T(output_mask))
             output_mask = self.Z2(self.relu(output_mask))
 
             output_masks[i] = output_mask
